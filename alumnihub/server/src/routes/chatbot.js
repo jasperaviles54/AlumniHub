@@ -5,22 +5,32 @@ const { supabase } = require("../config/supabase.js");
 
 const router = Router();
 
-const SYSTEM_PROMPT = `You are AlumniBot, a friendly and helpful assistant for students using AlumniHub — an alumni tracking and career platform at the Technological Institute of the Philippines.
-
-Your job is to help students with their inquiries. You can help with:
-- Explaining how to use AlumniHub features (profile, jobs, messaging, career advice, settings)
-- Career guidance: resume tips, interview prep, choosing a career path, skill-building
-- Connecting with alumni and career advisors through the platform
-- Understanding career predictions, job matching, and curriculum impact reports
-- Academic and program-related questions
+const BASE_PROMPT = `You are AlumniBot, a friendly and helpful assistant inside AlumniHub — an alumni tracking and career platform at the Technological Institute of the Philippines.
 
 Style guidelines:
 - Be warm, concise, and encouraging — talk like a supportive senior, not a corporate FAQ.
-- Keep replies short (2–5 sentences) unless the student asks for detail.
-- When pointing students to a feature, mention the sidebar item (e.g. "Jobs", "Career Advice", "My Profile").
-- If asked something outside scope (general homework, unrelated topics), politely steer back to career/AlumniHub topics.
-- Never invent platform features. If unsure, suggest contacting their career advisor through the Inbox.
-- Do not provide medical, legal, or financial advice. Suggest seeing a professional instead.`;
+- Keep replies short (2–5 sentences) unless the user asks for detail.
+- When pointing to a feature, mention the sidebar item by name (e.g. "Jobs", "My Profile", "Inbox").
+- If asked something outside scope (homework, unrelated topics), politely steer back to career/AlumniHub topics.
+- Never invent platform features. If unsure, suggest contacting a career advisor via the Inbox.
+- Do not provide medical, legal, or financial advice — suggest seeing a professional instead.`;
+
+const STUDENT_FEATURES = `You are talking to a STUDENT. They have access to:
+- My Profile, Jobs, Inbox, Career Advice (notes & recommendations from their advisor), Settings.
+You can help with: how to use these features, career guidance (resumes, interviews, skill-building, choosing a path), connecting with alumni and advisors.`;
+
+const ALUMNI_FEATURES = `You are talking to an ALUMNI. They have access to:
+- My Profile (with CV upload — the system AI-extracts career milestones and skills),
+- Jobs (with AI Smart Job Matching that ranks postings by skills, industry, experience, program),
+- Inbox + Message Requests (private profiles require a request before messaging),
+- Career Prediction (peer-based trajectory analysis),
+- Settings (including the privacy toggle for hiding their profile from other alumni).
+You can help with: how to use these features, professional growth, networking with other alumni, mentoring students, interpreting their career prediction or job matches, and updating their profile or CV.`;
+
+function systemPromptForRole(role) {
+  const roleBlock = role === "alumni" ? ALUMNI_FEATURES : STUDENT_FEATURES;
+  return `${BASE_PROMPT}\n\n${roleBlock}`;
+}
 
 function getApiKeys() {
   return [
@@ -31,14 +41,14 @@ function getApiKeys() {
   ].filter(Boolean);
 }
 
-async function callGeminiChat(history, userMessage, studentContext) {
+async function callGeminiChat(history, userMessage, userContext, role) {
   const keys = getApiKeys();
   if (keys.length === 0) throw new Error("No GEMINI_API_KEY configured.");
 
   const MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
   const systemInstruction =
-    SYSTEM_PROMPT +
-    (studentContext ? `\n\nStudent context (use only if relevant):\n${studentContext}` : "");
+    systemPromptForRole(role) +
+    (userContext ? `\n\nUser context (use only if relevant):\n${userContext}` : "");
 
   let lastError;
   for (const modelName of MODELS) {
@@ -74,12 +84,19 @@ async function callGeminiChat(history, userMessage, studentContext) {
   throw lastError;
 }
 
-function buildStudentContext(profile) {
+function buildUserContext(profile) {
   if (!profile) return "";
   const parts = [];
   if (profile.first_name) parts.push(`Name: ${profile.first_name}`);
   if (profile.program) parts.push(`Program: ${profile.program}`);
-  if (profile.year_level) parts.push(`Year level: ${profile.year_level}`);
+  if (profile.role === "student" && profile.year_level) {
+    parts.push(`Year level: ${profile.year_level}`);
+  }
+  if (profile.role === "alumni") {
+    if (profile.graduation_year) parts.push(`Graduation year: ${profile.graduation_year}`);
+    if (profile.current_job_title) parts.push(`Current role: ${profile.current_job_title}`);
+    if (profile.industry) parts.push(`Industry: ${profile.industry}`);
+  }
   if (Array.isArray(profile.skills) && profile.skills.length) {
     parts.push(`Skills: ${profile.skills.slice(0, 10).join(", ")}`);
   }
@@ -88,7 +105,7 @@ function buildStudentContext(profile) {
 
 // ── POST /api/chatbot/message
 // Body: { message: string, history?: [{ role: "user"|"assistant", content: string }] }
-router.post("/message", authenticate, authorize("student"), async (req, res, next) => {
+router.post("/message", authenticate, authorize("student", "alumni"), async (req, res, next) => {
   try {
     const { message, history } = req.body || {};
 
@@ -105,11 +122,11 @@ router.post("/message", authenticate, authorize("student"), async (req, res, nex
           .slice(-10)
       : [];
 
-    const studentContext = buildStudentContext(req.profile);
+    const userContext = buildUserContext(req.profile);
 
     let reply;
     try {
-      reply = await callGeminiChat(safeHistory, message.trim(), studentContext);
+      reply = await callGeminiChat(safeHistory, message.trim(), userContext, req.profile?.role);
     } catch (err) {
       console.error("[chatbot] Gemini error:", err.message);
       return res.status(503).json({

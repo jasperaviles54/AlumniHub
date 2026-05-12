@@ -1,36 +1,66 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MessageCircle, X, Send, Loader2, Sparkles } from "lucide-react";
 import { chatbotService } from "../services/api";
+import { useAuth } from "../context/AuthContext";
 
-const STORAGE_KEY = "alumnihub_chatbot_history_v1";
-const GREETING = {
+const STORAGE_PREFIX = "alumnihub_chatbot_history_v1:";
+
+const STUDENT_GREETING = {
   role: "assistant",
   content:
     "Hi! I'm AlumniBot. Ask me anything about AlumniHub, your career path, or how to make the most of the platform.",
 };
 
-const QUICK_PROMPTS = [
+const ALUMNI_GREETING = {
+  role: "assistant",
+  content:
+    "Welcome back! I'm AlumniBot. Ask me about your job matches, career predictions, networking with other alumni, or any AlumniHub feature.",
+};
+
+const STUDENT_PROMPTS = [
   "How do I update my profile?",
   "How does job matching work?",
   "Tips for my first internship?",
   "How can I message an alumni?",
 ];
 
-function loadHistory() {
+const ALUMNI_PROMPTS = [
+  "How does Career Prediction work?",
+  "How do I upload my CV?",
+  "Tips for switching industries?",
+  "How do I make my profile private?",
+];
+
+function greetingForRole(role) {
+  return role === "alumni" ? ALUMNI_GREETING : STUDENT_GREETING;
+}
+
+function promptsForRole(role) {
+  return role === "alumni" ? ALUMNI_PROMPTS : STUDENT_PROMPTS;
+}
+
+function loadHistory(storageKey, greeting) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [GREETING];
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [greeting];
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length) return parsed;
-    return [GREETING];
+    return [greeting];
   } catch {
-    return [GREETING];
+    return [greeting];
   }
 }
 
-export default function StudentChatbot() {
+export default function AiChatbot() {
+  const { profile } = useAuth();
+  const role = profile?.role === "faculty" ? "career_advisor" : profile?.role;
+
+  const greeting = useMemo(() => greetingForRole(role), [role]);
+  const quickPrompts = useMemo(() => promptsForRole(role), [role]);
+  const storageKey = useMemo(() => `${STORAGE_PREFIX}${role || "guest"}`, [role]);
+
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState(() => loadHistory());
+  const [messages, setMessages] = useState(() => loadHistory(storageKey, greeting));
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
@@ -40,11 +70,11 @@ export default function StudentChatbot() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-30)));
+      localStorage.setItem(storageKey, JSON.stringify(messages.slice(-30)));
     } catch {
       /* ignore quota errors */
     }
-  }, [messages]);
+  }, [messages, storageKey]);
 
   useEffect(() => {
     if (open && scrollRef.current) {
@@ -70,7 +100,7 @@ export default function StudentChatbot() {
 
     try {
       const history = next
-        .filter((m) => m !== GREETING)
+        .filter((m) => m !== greeting)
         .slice(-10, -1);
 
       const { data } = await chatbotService.sendMessage(trimmed, history);
@@ -93,7 +123,7 @@ export default function StudentChatbot() {
   }
 
   function handleClear() {
-    setMessages([GREETING]);
+    setMessages([greeting]);
     setError(null);
   }
 
@@ -123,7 +153,9 @@ export default function StudentChatbot() {
               </div>
               <div className="leading-tight">
                 <p className="text-sm font-semibold">AlumniBot</p>
-                <p className="text-[11px] text-blue-100">Your student assistant</p>
+                <p className="text-[11px] text-blue-100">
+                  {role === "alumni" ? "Your alumni assistant" : "Your student assistant"}
+                </p>
               </div>
             </div>
             <button
@@ -156,7 +188,7 @@ export default function StudentChatbot() {
           {/* Quick prompts (only when conversation is fresh) */}
           {messages.length <= 1 && !sending && (
             <div className="px-3 pb-2 flex flex-wrap gap-1.5">
-              {QUICK_PROMPTS.map((p) => (
+              {quickPrompts.map((p) => (
                 <button
                   key={p}
                   onClick={() => send(p)}
