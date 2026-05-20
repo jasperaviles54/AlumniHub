@@ -111,6 +111,7 @@ export const chatbotService = {
 export const feedbackService = {
   submit: (data) => api.post("/feedback", data),
   getAll: (params) => api.get("/feedback", { params }),
+  updateStatus: (id, data) => api.patch(`/feedback/${id}`, data),
 };
 
 export default api;
